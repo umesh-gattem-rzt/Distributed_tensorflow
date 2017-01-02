@@ -1,11 +1,13 @@
 import tensorflow as tf
-import rztutil
+from utils import rztutil
+from utils.Utils import Utils
 import time
 
 # cluster specification
 parameter_servers = ["192.168.51.24:8080"]
 workers = ["192.168.51.24:8081",
-           "192.168.33.10:8080"]
+           "192.168.51.24:8082",
+           "192.168.51.24:8083"]
 cluster = tf.train.ClusterSpec({"ps": parameter_servers, "worker": workers})
 
 # input flags
@@ -19,8 +21,7 @@ server = tf.train.Server(cluster,
                          task_index=FLAGS.task_index)
 
 train_data, train_label, test_data, test_label = rztutil.read_csv('mnist.csv', split_ratio=80, delimiter=";",
-                                                                  output_label=True, label_vector=True)
-
+                                                                  output_label=True, label_vector=True, randomize=True)
 
 # config
 learning_rate = 0.01
@@ -30,15 +31,25 @@ display_step = 1
 batch_size = 128
 saver_session = 1
 examples_to_show = 10
+no_of_workers = 3
 
 if FLAGS.job_name == "ps":
+    # model.split(no_of_workers, [50, 50], train_data)
+    # model.get_train_data(i=FLAGS.task_index)
     server.join()
+
 elif FLAGS.job_name == "worker":
-    if FLAGS.task_index == 0:
-        train_data = train_data[:400]
-    if FLAGS.task_index == 1:
-        train_data = train_data[400:799]
-    print(len(train_data))
+    model = Utils()
+    model.split(no_of_workers, [35, 45, 20], train_data)
+    train_data = model.get_train_data(FLAGS.task_index)
+    model.split(no_of_workers, [35, 45, 20], train_label)
+    train_label = model.get_train_label(FLAGS.task_index)
+
+    # train_data = Utils.get_train_data(i=FLAGS.task_index)
+    # if FLAGS.task_index == 0:
+    #     train_data = train_data[:400]
+    # if FLAGS.task_index == 1:
+    #     train_data = train_data[400:799]
     # Between-graph replication
     with tf.device(tf.train.replica_device_setter(
             worker_device="/job:worker/task:%d" % FLAGS.task_index,
@@ -127,25 +138,26 @@ elif FLAGS.job_name == "worker":
             for i in range(training_epochs):
                 if i % display_step == 0:
                     print("Epoch :", i)
-                step, batch = 1, 0
-                while step < len(train_data) / batch_size:
+                batch, step = 0, 0
+                while batch < len(train_data):
                     batch_x, batch_y = train_data[batch: batch + batch_size], train_label[batch:batch + batch_size]
                     batch += batch_size
                     sess.run(train_op, feed_dict={x: batch_x, y: batch_y})
                     if i % display_step == 0:
                         cost, acc = sess.run([loss, accuracy], feed_dict={x: batch_x, y: batch_y})
-                        print("Batch " + str(step * batch_size) + ", Minibatch Loss= " + \
-                              "{:.6f}".format(cost) + ", Training Accuracy= " + \
+                        print("Batch: ", step,
+                              ", No of records", len(batch_x), ", Loss= " +
+                              "{:.6f}".format(cost) + ", Training Accuracy= " +
                               "{:.5f}".format(acc))
-                    step += 1
-                    if i % saver_session == 0:
-                        saver.save(sess, 'save_session/mnist.model')
-            sv.stop()
-        print("Final Cost: %.4f" % cost)
-        result, test_cost, test_acc = sess.run([pred, loss, accuracy], feed_dict={x: test_data, y: test_label})
-        print("--------------------------Testing---------------------------")
-        print("Test Cost :", test_cost)
-        print("Test Accuracy :", test_acc)
-        print("Session ends at ", time.time(), "time")
-        print("Total time takes for execution:", time.time()-start)
-    print("done")
+                        if i % saver_session == 0:
+                            saver.save(sess, 'save_session/mnist.model')
+                        step += 1
+                sv.stop()
+            print("Final Cost: %.4f" % cost)
+            result, test_cost, test_acc = sess.run([pred, loss, accuracy], feed_dict={x: test_data, y: test_label})
+            print("--------------------------Testing---------------------------")
+            print("Test Cost :", test_cost)
+            print("Test Accuracy :", test_acc)
+            print("Session ends at ", time.time(), "time")
+            print("Total time takes for execution:", time.time() - start)
+        print("done")
